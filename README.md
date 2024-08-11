@@ -1,4 +1,4 @@
-# learn-pub-sub-starter (Peril)
+# Peril Game
 
 The project includes two parts:
 1. Utilized multiplayer realtime communication with Rabbit MQ, this is a course work from boot.dev.
