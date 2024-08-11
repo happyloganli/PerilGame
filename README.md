@@ -1,3 +1,5 @@
 # learn-pub-sub-starter (Peril)
 
-This is the starter code used in Boot.dev's [Learn Pub/Sub](https://learn.boot.dev/learn-pub-sub) course.
+The project includes two parts:
+1. Utilized multiplayer realtime communication with Rabbit MQ, this is a course work from boot.dev.
+2. Integrated Mongo DB to persistent game log, this is my idea.
