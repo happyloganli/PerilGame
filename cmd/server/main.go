@@ -1,14 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
-	"os"
-	"os/signal"
 )
 
 func main() {
@@ -16,24 +17,28 @@ func main() {
 	// Connect to rabbitMQ
 	fmt.Println("Starting Peril server...")
 	amqpURL := "amqp://guest:guest@localhost:5672/"
-	dial, err := amqp.Dial(amqpURL)
+	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
 		return
 	}
-	defer dial.Close()
+	defer conn.Close()
 	log.Printf("Connected to %s", amqpURL)
 
 	// Open a new channel
-	channel, err := dial.Channel()
+	channel, err := conn.Channel()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer channel.Close()
 
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://localhost:27017"))
 	if err != nil {
-		log.Printf("Error publishing peril event: %v", err)
-		return
+		log.Fatal(err)
 	}
+	defer client.Disconnect(context.Background())
+
+	gameLogWorker := gamelogic.NewGameLogWorker(client, conn)
+	go gameLogWorker.Start()
 
 	for {
 		// Get input from the user
@@ -70,8 +75,5 @@ func main() {
 		}
 	}
 
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	<-signalChan
 	log.Println("Shutting down...")
 }

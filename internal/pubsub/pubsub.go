@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
@@ -24,6 +26,23 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 		ContentType: "application/json",
 		Body:        body,
 	})
+	if err != nil {
+		log.Printf("Error publishing message to exchange: %v", err)
+		return err
+	}
+	return nil
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+	err := encoder.Encode(val)
+	body := buffer.Bytes()
+	err = ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
+		ContentType: "application/gob",
+		Body:        body,
+	})
+	log.Printf("Published message to exchange: %v", val)
 	if err != nil {
 		log.Printf("Error publishing message to exchange: %v", err)
 		return err
@@ -79,6 +98,36 @@ func SubscribeJSON[T any](
 				delivery.Nack(false, false)
 			}
 
+		}
+	}()
+	return nil
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType uint8,
+	handler func(T) AckType,
+) error {
+	//DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
+	ch, _ := conn.Channel()
+	deliveries, _ := ch.Consume(queueName, "", false, false, false, false, nil)
+	go func() {
+		for delivery := range deliveries {
+			var msg T
+			decoder := gob.NewDecoder(bytes.NewReader(delivery.Body))
+			decoder.Decode(&msg)
+			ackType := handler(msg)
+			switch ackType {
+			case Ack:
+				delivery.Ack(false)
+			case NackRequeue:
+				delivery.Nack(false, true)
+			case NackDiscard:
+				delivery.Nack(false, false)
+			}
 		}
 	}()
 	return nil

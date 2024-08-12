@@ -7,9 +7,8 @@ import (
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
-	"os"
-	"os/signal"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -42,12 +41,12 @@ func main() {
 	// Declare and bing the moving queue
 	pubsub.DeclareAndBind(dial, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+username, routing.ArmyMovesPrefix+".*", amqp.Transient)
 	// Each client subscribes moving messages from the moving queue
-	pubsub.SubscribeJSON(dial, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+username, routing.ArmyMovesPrefix+".*", amqp.Transient, handlerMove(gameState, channel, username))
+	pubsub.SubscribeJSON(dial, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+username, routing.ArmyMovesPrefix+".*", amqp.Transient, handlerMove(gameState, channel))
 
 	// Declare and bind the war queue
 	pubsub.DeclareAndBind(dial, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+username, routing.WarRecognitionsPrefix+".*", amqp.Transient)
 	// Each client subscribes war messages from the war queue
-	pubsub.SubscribeJSON(dial, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+username, routing.WarRecognitionsPrefix+".*", amqp.Transient, handlerWar(gameState))
+	pubsub.SubscribeJSON(dial, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+username, routing.WarRecognitionsPrefix+".*", amqp.Transient, handlerWar(gameState, channel))
 
 	// Wait for user's input command
 	for {
@@ -72,11 +71,6 @@ func main() {
 			log.Printf("Unknown command: %s", command)
 		}
 	}
-
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	<-signalChan
-	log.Println("Shutting down...")
 }
 
 func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.AckType {
@@ -90,7 +84,7 @@ func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.Ack
 	}
 }
 
-func handlerMove(gs *gamelogic.GameState, channel *amqp.Channel, username string) func(move gamelogic.ArmyMove) pubsub.AckType {
+func handlerMove(gs *gamelogic.GameState, channel *amqp.Channel) func(move gamelogic.ArmyMove) pubsub.AckType {
 	return func(am gamelogic.ArmyMove) pubsub.AckType {
 		// Defer a print statement to give the user a new prompt
 		defer fmt.Print("> ")
@@ -101,7 +95,7 @@ func handlerMove(gs *gamelogic.GameState, channel *amqp.Channel, username string
 		case gamelogic.MoveOutComeSafe:
 			return pubsub.Ack
 		case gamelogic.MoveOutcomeMakeWar:
-			err := pubsub.PublishJSON(channel, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+username, gamelogic.RecognitionOfWar{
+			err := pubsub.PublishJSON(channel, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+gs.Player.Username, gamelogic.RecognitionOfWar{
 				Attacker: am.Player,
 				Defender: gs.Player,
 			})
@@ -117,23 +111,42 @@ func handlerMove(gs *gamelogic.GameState, channel *amqp.Channel, username string
 	}
 }
 
-func handlerWar(gs *gamelogic.GameState) func(war gamelogic.RecognitionOfWar) pubsub.AckType {
+func handlerWar(gs *gamelogic.GameState, channel *amqp.Channel) func(war gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(rw gamelogic.RecognitionOfWar) pubsub.AckType {
 		// Defer a print statement to give the user a new prompt
 		defer fmt.Print("> ")
 
 		// Use the game state's HandleWar method to pause the game
-		outcome, _, _ := gs.HandleWar(rw)
+		outcome, winner, loser := gs.HandleWar(rw)
+
 		switch outcome {
 		case gamelogic.WarOutcomeNotInvolved:
 			return pubsub.Ack
 		case gamelogic.WarOutcomeNoUnits:
 			return pubsub.NackDiscard
 		case gamelogic.WarOutcomeOpponentWon:
+			gameLog := gamelogic.GameLog{
+				CurrentTime: time.Now(),
+				Message:     fmt.Sprintf("%s won a war against %s", winner, loser),
+				Username:    gs.Player.Username,
+			}
+			pubsub.PublishGob(channel, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gs.Player.Username, gameLog)
 			return pubsub.Ack
 		case gamelogic.WarOutcomeYouWon:
+			gameLog := gamelogic.GameLog{
+				CurrentTime: time.Now(),
+				Message:     fmt.Sprintf("%s won a war against %s", winner, loser),
+				Username:    gs.Player.Username,
+			}
+			pubsub.PublishGob(channel, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gs.Player.Username, gameLog)
 			return pubsub.Ack
 		case gamelogic.WarOutcomeDraw:
+			gameLog := gamelogic.GameLog{
+				CurrentTime: time.Now(),
+				Message:     fmt.Sprintf("A war between %s and %s result in a draw.", winner, loser),
+				Username:    gs.Player.Username,
+			}
+			pubsub.PublishGob(channel, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gs.Player.Username, gameLog)
 			return pubsub.Ack
 		default:
 			log.Printf("Unknown outcome: %s", outcome)
